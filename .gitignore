@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 vendor/
+screenparse/
 
 # Python
 __pycache__/
