@@ -1,0 +1,19 @@
+{
+  "name": "magnitude-privacy-extension",
+  "version": "1.0.0",
+  "description": "This is a Chrome (MV3) extension port of the local-first, privacy-preserving browser agent design, built by re-implementing the relevant seams of the [Magnitude browser-agent](https://github.com/magnitudedev/browser-agent) repository inside an extension runtime.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "puppeteer": "^25.10.0"
+  }
+}

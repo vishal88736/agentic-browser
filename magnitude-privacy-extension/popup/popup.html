@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <h1>Local-First Privacy Agent</h1>
+  <div id="unlockSection" style="margin-bottom: 8px; display: flex; gap: 8px;">
+    <input id="popup_password" type="password" placeholder="Vault Password" style="flex: 1;" />
+    <button id="unlockVaultBtn">Unlock Vault</button>
+  </div>
+  <textarea id="instruction" rows="3" placeholder="e.g. Fill in the Aadhaar upload form"></textarea>
+  <div class="row">
+    <button id="run">Run task</button>
+    <button id="stop">Stop</button>
+    <a id="openOptions" href="#">Settings</a>
+  </div>
+  <div id="status"></div>
+  <pre id="log"></pre>
+  <script src="popup.js"></script>
+</body>
+</html>

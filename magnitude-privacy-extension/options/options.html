@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 560px; margin: 24px auto; color: #1a1a1a; }
+    fieldset { margin-bottom: 16px; }
+    label { display: block; margin: 8px 0 2px; font-size: 13px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 4px; font-size: 13px; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; }
+    .checkbox-row input { width: auto; }
+    button { margin-top: 12px; padding: 8px 14px; }
+    small { color: #666; }
+  </style>
+</head>
+<body>
+  <h2>Local-First Privacy Agent — Settings</h2>
+
+  <fieldset>
+    <legend>Local VLM</legend>
+    <label>Model ID (transformers.js-compatible)</label>
+    <input id="LOCAL_VLM_MODEL" />
+    <label>Device</label>
+    <select id="LOCAL_VLM_DEVICE"><option value="auto">auto</option><option value="webgpu">webgpu</option><option value="wasm">wasm (CPU)</option></select>
+    <label>Precision / dtype</label>
+    <select id="LOCAL_VLM_DTYPE"><option value="auto">auto</option><option value="fp16">fp16</option><option value="q8">q8</option><option value="q4">q4</option></select>
+  </fieldset>
+
+  <fieldset>
+    <legend>Routing &amp; privacy</legend>
+    <div class="checkbox-row"><input type="checkbox" id="LOCAL_FIRST" /><label>Prefer local execution when possible</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="ALLOW_REMOTE_REASONING" /><label>Allow remote reasoning fallback</label></div>
+    <label>Privacy mode</label>
+    <select id="PRIVACY_MODE"><option value="strict">strict (always sanitize)</option><option value="balanced">balanced</option></select>
+  </fieldset>
+
+  <fieldset>
+    <legend>Remote reasoning endpoint (optional, OpenAI-compatible)</legend>
+    <small>Only ever receives sanitized context — see README.</small>
+    <label>Endpoint URL</label>
+    <input id="REMOTE_ENDPOINT" placeholder="https://api.openai.com/v1/chat/completions" />
+    <label>Model</label>
+    <input id="REMOTE_MODEL" placeholder="gpt-4o-mini" />
+    <label>API key</label>
+    <input id="REMOTE_API_KEY" type="password" />
+  </fieldset>
+
+  <fieldset>
+    <legend>Local credential vault</legend>
+    <small>Stored in chrome.storage.local on this device only. Plaintext in this scaffold — see README for the production hardening TODO.</small>
+    <label>Master Password</label>
+    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+      <input id="master_password" type="password" placeholder="Enter password to unlock/save vault" />
+      <button id="unlock" type="button" style="margin-top: 0;">Unlock</button>
+    </div>
+    <label>Aadhaar number</label>
+    <input id="cred_aadhaar_number" disabled />
+    <label>PAN</label>
+    <input id="cred_pan" disabled />
+    <label>Password</label>
+    <input id="cred_password" type="password" disabled />
+  </fieldset>
+
+  <button id="save">Save</button>
+  <span id="savedMsg" style="margin-left:8px; color: green;"></span>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>
