@@ -35,5 +35,8 @@
       "resources": ["offscreen/offscreen.html"],
       "matches": ["<all_urls>"]
     }
-  ]
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; connect-src https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://cdn-lfs-us-1.hf.co https://cdn.jsdelivr.net https://api.groq.com https://api.openai.com https:; object-src 'self';"
+  }
 }

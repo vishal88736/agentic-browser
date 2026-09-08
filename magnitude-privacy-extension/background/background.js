@@ -8,27 +8,46 @@ import { decryptVault } from '../shared/crypto.js';
 
 let offscreenReady = null;
 let taskState = { running: false, log: [] };
+let localVlmAvailable = false; // set to true only after successful LOAD_MODEL
 
 // --- offscreen document lifecycle --------------------------------------
 
 async function ensureOffscreen() {
   if (offscreenReady) return offscreenReady;
-  offscreenReady = (async () => {
+  // Store promise but reset on failure so a retry is possible.
+  const p = (async () => {
     const existing = await chrome.runtime.getContexts?.({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
     if (!existing || existing.length === 0) {
       await chrome.offscreen.createDocument({
         url: 'offscreen/offscreen.html',
-        reasons: ['WORKERS'], // model inference; DOM/canvas needed for sanitize too
-        justification: 'Runs the local VLM (transformers.js) for on-device visual perception.'
+        // BLOBS: needed for fetch(dataUrl)/createImageBitmap in sanitize.js
+        // DOM_SCRAPING: needed for OffscreenCanvas and transformers.js model inference
+        reasons: ['BLOBS', 'DOM_SCRAPING'],
+        justification: 'Runs the local VLM (transformers.js) for on-device visual perception and privacy-safe screenshot redaction.'
       });
     }
   })();
+  p.catch(() => { offscreenReady = null; }); // allow retry on failure
+  offscreenReady = p;
   return offscreenReady;
 }
 
 async function offscreenCall(msg) {
   await ensureOffscreen();
-  return chrome.runtime.sendMessage({ target: 'offscreen', ...msg });
+  // The offscreen document uses an ES module script, which may take a few ms to execute
+  // and register its listener AFTER createDocument resolves. Retry if undefined.
+  for (let i = 0; i < 5; i++) {
+    const response = await chrome.runtime.sendMessage({ target: 'offscreen', ...msg });
+    if (response !== undefined) {
+      return response;
+    }
+    // wait 200ms before retrying
+    await new Promise(r => setTimeout(r, 200));
+  }
+  if (chrome.runtime.lastError) {
+    throw new Error(chrome.runtime.lastError.message);
+  }
+  throw new Error('offscreenCall returned undefined (channel closed early or script not ready)');
 }
 
 // --- credential vault (local only, never leaves the extension) --------
@@ -66,7 +85,7 @@ async function runTask(instruction, tabId) {
   taskState = { running: true, log: [] };
   const config = await getConfig();
 
-  await offscreenCall({
+  const loadResult = await offscreenCall({
     type: 'LOAD_MODEL',
     config: {
       modelId: config.LOCAL_VLM_MODEL,
@@ -74,7 +93,13 @@ async function runTask(instruction, tabId) {
       dtype: config.LOCAL_VLM_DTYPE
     }
   });
-  log({ event: 'model_loaded', model: config.LOCAL_VLM_MODEL });
+  if (!loadResult.ok) {
+    log({ event: 'vlm_load_warning', message: `Local VLM unavailable: ${loadResult.error}. Continuing with DOM-only perception + remote reasoning.` });
+    localVlmAvailable = false;
+  } else {
+    localVlmAvailable = true;
+    log({ event: 'model_loaded', model: config.LOCAL_VLM_MODEL });
+  }
 
   for (let step = 0; step < config.MAX_STEPS && taskState.running; step++) {
     const screenshot = await chrome.tabs.captureVisibleTab(undefined, { format: 'png' });
@@ -82,18 +107,25 @@ async function runTask(instruction, tabId) {
 
     const needsReanalysis = await shouldReanalyze(screenshot, config.CHANGE_DETECTION_THRESHOLD);
     let perception;
-    if (needsReanalysis) {
+    if (localVlmAvailable && needsReanalysis) {
       const result = await offscreenCall({
         type: 'RUN_PERCEPTION',
         screenshot,
         domFieldsHint: domSnapshot.fields
       });
-      if (!result.ok) throw new Error(result.error);
-      perception = result.perception;
-      cachePerception(perception);
-    } else {
-      perception = getCachedPerception();
+      if (!result.ok) {
+        log({ event: 'vlm_perception_warning', message: result.error });
+        perception = domOnlyPerception(domSnapshot);
+      } else {
+        perception = result.perception;
+        cachePerception(perception);
+      }
+    } else if (localVlmAvailable) {
+      perception = getCachedPerception() || domOnlyPerception(domSnapshot);
       log({ event: 'reused_cached_perception' });
+    } else {
+      // No local VLM — build a minimal perception from DOM fields only
+      perception = domOnlyPerception(domSnapshot);
     }
 
     const decision = runPrivacyGate({
@@ -178,6 +210,26 @@ async function runTask(instruction, tabId) {
 }
 
 /**
+ * Fallback when local VLM is unavailable: build a minimal perception
+ * object purely from the DOM snapshot so the privacy gate and remote
+ * reasoner still have structured context to work with.
+ */
+function domOnlyPerception(domSnapshot) {
+  const elements = (domSnapshot.fields || []).map(f => ({
+    type: f.role || f.tag || 'element',
+    label: f.label || f.name || f.placeholder,
+    text: f.label || f.placeholder,
+    bbox: f.bbox,
+    sensitive: false,  // DOM layer in privacyGate will re-classify
+    confidence: 0.8
+  }));
+  return {
+    elements,
+    pageDescription: `Page: ${domSnapshot.title || ''} (${domSnapshot.url || ''})`
+  };
+}
+
+/**
  * Minimal local-only planner: handles the common "fill a known sensitive
  * field with a locally-stored credential" case entirely on-device, with
  * zero network calls, per spec section 9. Anything more open-ended falls
@@ -220,7 +272,7 @@ async function executeAction(action, tabId) {
       await chrome.tabs.sendMessage(tabId, { type: 'ACTION_TYPE', target: action.target, content: action.content });
       break;
     case 'mouse:scroll':
-      await chrome.tabs.sendMessage(tabId, { type: 'ACTION_CLICK_ELEMENT', target: action.target }); // scroll-into-view fallback
+      await chrome.tabs.sendMessage(tabId, { type: 'ACTION_SCROLL', target: action.target, deltaX: action.deltaX || 0, deltaY: action.deltaY || 300 });
       break;
     case 'browser:navigate':
       await chrome.tabs.update(tabId, { url: action.url });
@@ -293,6 +345,25 @@ function waitForTabLoad(tabId) {
 // --- messaging entry points ---------------------------------------------
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'PRELOAD_MODEL') {
+    (async () => {
+      try {
+        const result = await offscreenCall({
+          type: 'LOAD_MODEL',
+          config: { modelId: msg.modelId, device: msg.device, dtype: msg.dtype }
+        });
+        if (result.ok) {
+          localVlmAvailable = true;
+          sendResponse({ ok: true });
+        } else {
+          sendResponse({ ok: false, error: result.error });
+        }
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e.message || e) });
+      }
+    })();
+    return true; // async response
+  }
   if (msg.type === 'START_TASK') {
     (async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -310,5 +381,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ log: taskState.log, running: taskState.running });
     return false;
   }
-  return false;
+  // Do not return false explicitly for messages we don't handle (like target: 'offscreen')
+  // as it can prematurely close the message channel in MV3.
 });

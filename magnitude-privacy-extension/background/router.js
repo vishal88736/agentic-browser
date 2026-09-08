@@ -4,7 +4,7 @@ const DEFAULT_CONFIG = {
   LOCAL_FIRST: true,
   ALLOW_REMOTE_REASONING: true,
   PRIVACY_MODE: 'strict', // 'strict' | 'balanced'
-  LOCAL_VLM_MODEL: 'onnx-community/Florence-2-base-ft', // verify current transformers.js-compatible id before shipping; see README
+  LOCAL_VLM_MODEL: '', // leave blank to use DOM-only perception + remote reasoning (recommended for most tasks).
   LOCAL_VLM_DEVICE: 'auto',
   LOCAL_VLM_DTYPE: 'auto',
   REMOTE_ENDPOINT: '', // OpenAI-generic compatible chat/completions URL; empty = remote disabled

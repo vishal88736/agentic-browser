@@ -35,6 +35,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return false;
     }
 
+    case 'ACTION_SCROLL': {
+      const scrollTarget = resolveTarget(msg.target);
+      const scrollEl = scrollTarget || document.scrollingElement || document.body;
+      scrollEl.scrollBy({ top: msg.deltaY || 0, left: msg.deltaX || 0, behavior: 'smooth' });
+      sendResponse({ ok: true });
+      return false;
+    }
+
     case 'ACTION_KEY': {
       const el = document.activeElement;
       dispatchKey(el, msg.key);

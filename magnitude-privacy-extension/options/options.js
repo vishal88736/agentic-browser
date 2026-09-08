@@ -84,4 +84,41 @@ async function save() {
 
 document.getElementById('save').addEventListener('click', save);
 document.getElementById('unlock').addEventListener('click', unlockVault);
+document.getElementById('downloadModel').addEventListener('click', async () => {
+  const modelId = document.getElementById('LOCAL_VLM_MODEL').value.trim();
+  const device   = document.getElementById('LOCAL_VLM_DEVICE').value;
+  const dtype    = document.getElementById('LOCAL_VLM_DTYPE').value;
+  const status   = document.getElementById('downloadStatus');
+
+  if (!modelId) {
+    status.textContent = '⚠ Enter a Model ID first.';
+    status.style.color = '#c00';
+    return;
+  }
+
+  status.textContent = '⏳ Downloading… this may take a few minutes.';
+  status.style.color = '#555';
+  document.getElementById('downloadModel').disabled = true;
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'PRELOAD_MODEL',
+      modelId,
+      device,
+      dtype
+    });
+    if (response && response.ok) {
+      status.textContent = '✅ Model cached! Ready to use.';
+      status.style.color = 'green';
+    } else {
+      status.textContent = `❌ Failed: ${response?.error || 'unknown error'}`;
+      status.style.color = '#c00';
+    }
+  } catch (e) {
+    status.textContent = `❌ Error: ${e.message}`;
+    status.style.color = '#c00';
+  } finally {
+    document.getElementById('downloadModel').disabled = false;
+  }
+});
 load();
