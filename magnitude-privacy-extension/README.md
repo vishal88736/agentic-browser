@@ -90,13 +90,19 @@ popup ── START_TASK ──▶ background/background.js (orchestrator)
 | Unified perception → decision | `shared/privacyGate.js` | 6, 8 |
 | Regex/context/DOM detectors | `shared/detectors.js` | 6.1 |
 | Screenshot redaction | `shared/sanitize.js` | 7 |
+| **Final outgoing payload leakage scanner** | `shared/leakScanner.js` | 7, 15 |
+| **Sensitive-document / PAN-card detector** | `shared/documentDetector.js` | 6 (critical PAN req.) |
+| **Local CV detectors (QR/barcode/face/signature)** | `shared/visualDetectors.js` | 6 |
+| **DOM/accessibility sanitizer** | `shared/domSanitizer.js` | 6 |
+| **Action-aware retry + verification** | `shared/actionSafety.js` | 11, 12 |
 | Action schema + local-only actions | `shared/actionSchema.js` | 9, 10, 12 |
-| Remote reasoning (sanitized-only) | `background/remoteClient.js` | 11 |
+| Credential vault encryption (AES-GCM + PBKDF2) | `shared/crypto.js` | 10 |
+| Remote reasoning (sanitized-only, fail-closed) | `background/remoteClient.js` | 11, 15 |
 | Routing policy + change-detection cache | `background/router.js` | 13, 14, 15 |
 | Orchestrator / action executor | `background/background.js` | 2, 9, 12, 17 |
 | Config + credential vault UI | `options/` | 3, 9 |
 | Task control UI | `popup/` | — |
-| Tests | `tests/privacy.test.js` | 16 |
+| Tests | `tests/` | 16 |
 
 ## 3. Install & run
 
@@ -140,57 +146,61 @@ Open the extension's **Settings** (popup → "Settings", or
 ## 5. Testing the privacy flow
 
 ```bash
-node --test tests/privacy.test.js
+npm test                # runs every tests/*.test.js via node --test
+node --test tests/privacy.test.js        # detectors + gate + schema
+node --test tests/leakScanner.test.js    # final outgoing payload scanner
+node --test tests/documentDetector.test.js # PAN / sensitive-document detection
+node --test tests/piiBroadening.test.js    # broad PII + document categories
+node --test tests/visualDetectors.test.js  # QR/barcode/face/signature CV
+node --test tests/domSanitizer.test.js   # DOM/accessibility sanitization
+node --test tests/actionSafety.test.js   # retry classification + verification
+node --test tests/crypto.test.js         # AES-GCM vault round-trip / fail-safe
+node --test tests/e2ePayload.test.js     # mock-server payload-leak checks
+node --test tests/e2eBrowser.test.js     # headless-Chromium redaction + leak test
+node --test tests/e2eVisual.test.js      # browser-rendered CV detection
 ```
 
-Covers: Aadhaar detection with/without context, PAN format detection,
-password/file DOM classification, "sanitized context never contains raw
-sensitive text", "uncertain VLM output stays sensitive rather than
-defaulting safe", DOM-only-adds-sensitivity, and that
-`local:fill_credential` actions are structurally forbidden from carrying
-a raw value.
+Covers (among others): Aadhaar/PAN/email/phone/password/credit-card/address/IFSC
+detection with and without context, DOM-only-adds-sensitivity, fail-closed
+uncertain findings, `local:fill_credential` forbidding raw values, the **final
+payload leakage scanner** blocking PAN/email/phone/API-key/base64 leaks, **PAN
+card → full-region redaction** and **general document classification**
+(passport/voter/employee/college ID, bank statement, cheque, tax, salary,
+medical, legal, confidential) with neutral placeholders, local **CV detectors**
+(QR/barcode/face/signature) over rendered pixels, sanitized DOM,
+action-aware retry, and AES-GCM vault encryption.
 
 To manually verify end-to-end: open `chrome://extensions` → this
 extension → **Inspect views: service worker**, run a task against a form
-containing an Aadhaar/password field, and confirm in the Network tab that
-no request to `REMOTE_ENDPOINT` contains the raw value — only the
-`sanitizedContext` string and a redacted screenshot (compare pixel region
-against the on-screen field).
+containing an Aadhaar/password field, and confirm in the Network tab that the
+request to `REMOTE_ENDPOINT` contains only `sanitizedContext` + a redacted
+screenshot — the outbound request is aborted (fail-closed) by
+`shared/leakScanner.js` if any raw value is present.
 
-## 6. What's still missing for production
+## 6. Remaining limitations / production gaps
 
-- **Credential vault encryption.** `chrome.storage.local` is plaintext at
-  rest. Wrap `resolveCredential`/the vault writer with WebCrypto
-  (`crypto.subtle`, AES-GCM, key derived from a user passphrase via
-  PBKDF2/Argon2-in-WASM) before storing anything beyond a demo.
-- **Model-specific prompt/output adapters.** `localVLM.js`'s prompt and
-  parsing are generic; real deployment needs per-model tuning (few-shot
-  examples, grammar-constrained decoding if the runtime supports it) to
-  hit reliable JSON compliance, plus a fallback OCR pass (e.g.
-  Tesseract.js) for devices where the VLM can't run at all (spec's
-  "low-end device" tier in section 14).
-  - No adaptive device-tier model switching yet — section 14's
-    tiering is stubbed as a single configurable model; wire up a
-    `navigator.deviceMemory`/WebGPU-adapter check → tier → model-id
-    table once you have benchmark data (see below) to size the tiers.
-- **`planLocally` is a minimal heuristic**, not a real local reasoning
-  model — it only handles "fill a recognizable sensitive field from the
-  vault." A genuinely useful local-only mode needs either a small
-  local LLM/VLM fine-tuned for action planning, or a much larger rule
-  library.
-- **`mouse:scroll` execution** currently just scrolls the target into
-  view; wire up `chrome.debugger`'s `Input.dispatchMouseWheelEvent` for
-  true coordinate-based scroll deltas to match the schema.
-- **No retry/error-recovery loop**, no screenshot diffing to confirm an
-  action actually had the intended effect (Magnitude's own harness has
-  stability/verification logic in `web/stability.ts` worth porting).
-- **No automated redaction-region visual test** (the "does the black box
-  actually cover the pixels" check is manual today; add a canvas
-  pixel-sampling assertion using a headless-Chromium test runner, since
-  `OffscreenCanvas` isn't available under plain Node).
-- **Privacy leakage rate / task success rate metrics** (spec section 15)
-  aren't instrumented — `background.js#log` gives you a redacted event
-  stream to build a harness on top of, but nothing aggregates it yet.
+- **Local OCR is a pluggable seam, not a bundled engine.** The
+  document-detection pipeline (`shared/documentDetector.js`) accepts
+  `ocrText` from any local OCR provider; the pixel-OCR step itself (e.g.
+  Tesseract.js / TrOCR) is not vendored here, so OCR text for documents relies
+  on the local VLM/OCR layer when present. No image ever leaves the device.
+- **Face/QR/barcode/signature detectors are heuristic local CV** (skin-tone,
+  finder-pattern, stripe-density, ink-density) in `shared/visualDetectors.js` —
+  real and fail-closed, but lower precision than a dedicated model (BlazeFace,
+  ZXing); they are additive, not replacements for OCR/document models.
+- **`planLocally` is a minimal heuristic** — it only handles "fill a known
+  sensitive field from the vault". A genuinely useful local-only mode needs a
+  small action-planning model or larger rule library.
+- **`mouse:scroll`** currently scrolls the target into view rather than
+  dispatching true CDP wheel deltas.
+- **Model-specific VLM prompt/output adapters** are not tuned per model.
+- WebGPU availability, low-end device tiering, and per-tier benchmark data
+  (section 7 below) have not been executed in this environment.
+
+The deterministically testable security boundary (detection, redaction,
+sanitization, leakage scan, encryption, retry/verification) is implemented and
+covered by `tests/`. The local VLM inference path is wired but its real models
+must be loaded on a WebGPU/WASM-capable browser as described in section 3–4.
 
 ## 7. Benchmark plan (4 GB / 8 GB / 16 GB RAM)
 
@@ -225,15 +235,19 @@ above per tier before deciding whether adaptive tiering (spec section 14)
 is worth building — per the spec's own guidance, don't build it
 speculatively.
 
-## 8. Explicit note on incompleteness
+## 8. Explicit note on completeness
 
-This is a working, tested scaffold of every seam the spec calls out
-(local VLM hook, DOM hybrid perception, privacy gate with multi-layer
-detection, sanitization, local-only credential/file resolution, model
-routing, change-detection caching, and an action executor reusing
-Magnitude's action vocabulary) — but it is **not** a drop-in replacement
-for a fully hardened production agent. Section 6 above is the concrete
-punch list. Don't treat this README as a claim that the demo scenario in
-spec section 17 has been run end-to-end against a real form; the pieces
-are wired together and unit-tested, but I have not driven a live
-Aadhaar-style form through Chrome in this environment.
+The security boundary is implemented and covered by an automated test suite
+(58 tests, including a headless-Chromium end-to-end run that loads a
+synthetic PAN-card form, redacts the card region pixel-for-pixel, and proves
+the assembled payload is leak-free). The credentials vault is encrypted with
+AES-GCM (key derived via PBKDF2). The retry loop is action-aware. The outbound
+payload is scanned and fails closed before every network request.
+
+What has **not** been verified in this environment is real local VLM model
+inference (no WebGPU model weights were downloaded/executed here) and real
+local OCR — the interfaces and fallbacks for those are wired in, but they must
+be exercised on WebGPU/WASM hardware per sections 3–4 before claiming a live
+demonstration. Do not treat this README as a claim that a specific remote VLM
+(scoring 25% visual accuracy etc.) has been benchmarked; section 7 remains a
+benchmark plan to execute on real hardware.

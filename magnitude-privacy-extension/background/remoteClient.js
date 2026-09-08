@@ -1,6 +1,6 @@
 // background/remoteClient.js
 //
-// Optional remote reasoning step (spec section 11). Uses a plain
+// Optional remote reasoning step (spec section 11 / 15). Uses a plain
 // OpenAI-generic-compatible /chat/completions call rather than
 // Magnitude's BAML-generated client, because BAML's runtime is a
 // Rust-compiled native/WASM component generated from baml_src/*.baml —
@@ -10,9 +10,13 @@
 // apiKey, headers) is preserved here so existing self-hosted / proxy
 // endpoints users already run for Magnitude can be reused unchanged.
 //
-// CRITICAL INVARIANT: this module must only ever be called with data
-// that has already passed through shared/privacyGate.js. It does not
-// re-check sensitivity — that is the gate's job, not this client's.
+// CRITICAL INVARIANT: this module is the single network egress point. It
+// runs the final outgoing payload leakage scanner on the COMPLETE request
+// body before `fetch`, and aborts (fails closed) if anything leaks. This is
+// defense-in-depth on top of shared/privacyGate.js — the gate filters, the
+// scanner proves.
+
+import { scanPayloadForLeaks } from '../shared/leakScanner.js';
 
 export async function callRemoteReasoner({ endpoint, apiKey, model, sanitizedContext, sanitizedScreenshot, actionSchemaDescription }) {
   if (!endpoint) throw new Error('No remote endpoint configured');
@@ -34,20 +38,32 @@ export async function callRemoteReasoner({ endpoint, apiKey, model, sanitizedCon
     userContent.push({ type: 'image_url', image_url: { url: sanitizedScreenshot } });
   }
 
+  const body = {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent }
+    ],
+    temperature: 0.2
+  };
+
+  // FINAL LEAKAGE SCAN — if the payload is not proven safe, do not send it.
+  const scan = scanPayloadForLeaks({ body, sanitizedContext, sanitizedScreenshot });
+  if (!scan.safe) {
+    const details = scan.findings
+      .slice(0, 10)
+      .map(f => `${f.category}@${f.path}`)
+      .join(', ');
+    throw new Error(`Remote request BLOCKED by local leakage scanner: ${details}`);
+  }
+
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent }
-      ],
-      temperature: 0.2
-    })
+    body: JSON.stringify(body)
   });
 
   if (!res.ok) {

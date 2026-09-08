@@ -4,6 +4,8 @@ import { callRemoteReasoner } from './remoteClient.js';
 import { runPrivacyGate } from '../shared/privacyGate.js';
 import { sanitizeScreenshot, redactForLog } from '../shared/sanitize.js';
 import { validateAction, LOCAL_ONLY_VARIANTS } from '../shared/actionSchema.js';
+import { detectSensitiveDocument } from '../shared/documentDetector.js';
+import { decideRecovery, interpretOutcome } from '../shared/actionSafety.js';
 import { decryptVault } from '../shared/crypto.js';
 
 let offscreenReady = null;
@@ -134,11 +136,37 @@ async function runTask(instruction, tabId) {
       taskContext: { instruction }
     });
 
+    // Local sensitive-document detection (PAN card / Aadhaar / ID / PDF / …).
+    // Any detected document region is appended to the redaction set so its
+    // ENTIRE region is removed from the outgoing screenshot (spec §6/§7).
+    const documentResult = await detectSensitiveDocuments(domSnapshot, screenshot);
+    if (documentResult.regions.length) {
+      decision.sensitiveRegions.push(...documentResult.regions);
+      decision.blockedData.push(...documentResult.blocked);
+    }
+
+    // Local CV pass over screenshot pixels: QR, barcode, face, signature.
+    const visualResult = await offscreenCall({ type: 'RUN_VISUAL_DETECT', screenshot }).catch(() => ({ ok: false }));
+    if (visualResult.ok && visualResult.regions) {
+      for (const r of visualResult.regions) {
+        decision.sensitiveRegions.push({
+          bbox: r.bbox,
+          category: r.category,
+          source: 'visual_cv',
+          confidence: r.confidence,
+          mode: r.category === 'face' ? 'blur' : 'redact'
+        });
+        decision.blockedData.push({ label: r.category, category: r.category });
+      }
+    }
+
     log({
       event: 'privacy_gate',
       sensitiveCategories: [...new Set(decision.sensitiveRegions.map(r => r.category))],
       blockedCount: decision.blockedData.length,
-      allowedCount: decision.allowedData.length
+      allowedCount: decision.allowedData.length,
+      detectedDocuments: documentResult.documents,
+      visualFindings: visualResult.ok ? visualResult.regions.map(r => r.category) : []
     });
 
     // Try a purely local heuristic plan first (spec section 13 "simple task -> local").
@@ -169,34 +197,57 @@ async function runTask(instruction, tabId) {
 
     for (const action of plan.actions) {
       validateAction(action);
-      
+
       let success = false;
       let lastErr = null;
+
+      // Action-aware retry (spec section 12). Sensitive/destructive actions
+      // are never re-executed blindly; they fail closed and surface for
+      // confirmation. Safe actions may retry with fresh state.
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           await executeAction(action, tabId);
           success = true;
-          break; // Action succeeded
+          break;
         } catch (err) {
           lastErr = err;
-          log({ event: 'action_error', attempt, message: String(err) });
+          log({ event: 'action_error', attempt, variant: action.variant, message: String(err) });
+
+          // Re-capture fresh local state to check whether the action already
+          // succeeded (e.g. a submit that errored on the response parse).
+          const fresh = await chrome.tabs.sendMessage(tabId, { type: 'SNAPSHOT_DOM' }).catch(() => null);
+          const postShot = await chrome.tabs.captureVisibleTab(undefined, { format: 'png' }).catch(() => null);
+          const alreadySucceeded = fresh && postShot
+            ? await shouldReanalyze(postShot, config.CHANGE_DETECTION_THRESHOLD)
+            : false;
+
+          const recovery = decideRecovery(action, { alreadySucceeded, attempt, maxAttempts: 3 });
+          if (recovery.action !== 'retry') {
+            if (recovery.action === 'confirm') {
+              log({ event: 'action_needs_confirmation', variant: action.variant, reason: recovery.reason });
+            } else {
+              log({ event: 'action_failed_final', variant: action.variant, message: String(lastErr), reason: recovery.reason });
+            }
+            break;
+          }
           await new Promise(r => setTimeout(r, 1000 * attempt)); // exponential backoff
         }
       }
 
       if (!success) {
-        log({ event: 'action_failed_final', message: String(lastErr) });
         break; // Stop execution of the current plan if an action consistently fails
       }
-      
+
       log({ event: 'action_executed', variant: action.variant, redactedPayload: LOCAL_ONLY_VARIANTS.has(action.variant) ? '[local-only, not logged]' : action });
 
-      // Visual diffing for stability - Wait a moment for DOM/Network to settle
+      // Visual + DOM diffing for verification (spec section 11): confirm the
+      // action actually changed state rather than assuming success.
       await new Promise(r => setTimeout(r, 1000));
       const postActionScreenshot = await chrome.tabs.captureVisibleTab(undefined, { format: 'png' });
       const visuallyChanged = await shouldReanalyze(postActionScreenshot, config.CHANGE_DETECTION_THRESHOLD);
-      if (!visuallyChanged) {
-        log({ event: 'action_warning', message: 'Screen visually unchanged after action, action may have had no effect.' });
+      const outcome = interpretOutcome({ visuallyChanged });
+      if (!outcome.success) {
+        log({ event: 'action_warning', variant: action.variant, message: 'No observable change after action; it may have had no effect.' });
       }
     }
 
@@ -207,6 +258,49 @@ async function runTask(instruction, tabId) {
   }
 
   taskState.running = false;
+}
+
+/**
+ * Local document detection pipeline (spec critical PAN-card requirement).
+ * Inspects every image/document candidate in the DOM (img/canvas/object/file
+ * input) using metadata signals (alt text, file name, MIME type, aspect
+ * ratio) plus any OCR text the local VLM/OCR layer surfaced. A detected
+ * document yields a full-region redaction entry; nothing is sent remotely.
+ */
+async function detectSensitiveDocuments(domSnapshot, screenshot) {
+  const regions = [];
+  const blocked = [];
+  const documents = [];
+  const candidates = domSnapshot.mediaCandidates || [];
+
+  for (const cand of candidates) {
+    if (!cand.bbox || !cand.visible) continue;
+
+    const res = detectSensitiveDocument({
+      imageDataUrl: undefined, // pixel OCR is the local VLM/OCR seam
+      ocrText: cand.ocrText,
+      fileName: cand.fileName,
+      altText: cand.alt || cand.title,
+      mimeType: cand.mimeType,
+      width: cand.bbox.width,
+      height: cand.bbox.height
+    });
+
+    if (res.decision === 'redact' || res.decision === 'confirm') {
+      // Redact the ENTIRE document/card region, not just a text span.
+      regions.push({
+        bbox: cand.bbox,
+        category: res.category || 'identity_document',
+        source: 'document_detector',
+        confidence: res.confidence,
+        decision: res.decision
+      });
+      blocked.push({ label: cand.alt || cand.title || cand.tag, category: res.category || 'identity_document' });
+      documents.push({ tag: cand.tag, category: res.category, confidence: res.confidence, methods: res.methods });
+    }
+  }
+
+  return { regions, blocked, documents };
 }
 
 /**

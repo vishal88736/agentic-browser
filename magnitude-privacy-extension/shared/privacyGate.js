@@ -107,11 +107,12 @@ function buildSanitizedContext({ perception, sensitiveRegions, allowedData, task
   const nonSensitiveSummary = allowedData
     .filter(d => d.text || d.label)
     .slice(0, 25)
-    .map(d => d.label || d.text)
+    .map(d => safeDescriptiveText(d.label || d.text))
+    .filter(Boolean)
     .join(', ');
 
   const parts = [];
-  if (perception?.pageDescription) parts.push(perception.pageDescription);
+  if (perception?.pageDescription) parts.push(safeDescriptiveText(perception.pageDescription) ?? '');
   if (sensitiveSummary.length) {
     parts.push(`This page contains the following sensitive field types (values withheld): ${sensitiveSummary.join(', ')}.`);
   }

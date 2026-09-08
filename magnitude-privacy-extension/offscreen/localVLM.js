@@ -25,9 +25,9 @@ export async function loadModel({ modelId, device = 'auto', dtype = 'auto' } = {
   const resolvedDevice = device === 'auto' ? (await hasWebGPU() ? 'webgpu' : 'wasm') : device;
   const resolvedDtype  = dtype  === 'auto' ? (resolvedDevice === 'webgpu' ? 'fp16' : 'q4')  : dtype;
 
-  // The pipeline API automatically selects the correct model class for the
-  // given model's architecture (Qwen2.5-VL, SmolVLM, BLIP, Florence-2, etc.)
-  pipe = await pipeline('image-text-to-text', modelId, {
+  // 'image-to-text' is the transformers.js pipeline for VLMs (BLIP, Qwen2.5-VL, etc.)
+  // Note: Python transformers calls this 'image-text-to-text' but transformers.js uses 'image-to-text'
+  pipe = await pipeline('image-to-text', modelId, {
     device: resolvedDevice,
     dtype: resolvedDtype
   });
@@ -71,28 +71,17 @@ export async function runLocalPerception(dataUrl, { domFieldsHint } = {}) {
     'Respond with JSON only — no prose, no markdown fences.'
   ].join(' ');
 
-  const messages = [
-    {
-      role: 'user',
-      content: [
-        { type: 'image', url: dataUrl },
-        { type: 'text', text: prompt }
-      ]
-    }
-  ];
+  // image-to-text pipeline: first arg is image URL, second is options
+  const output = await pipe(dataUrl, {
+    max_new_tokens: 768,
+    // some models (BLIP) use forced_bos_token_id, others accept a text prompt
+    ...(prompt ? { prompt } : {})
+  });
 
-  const output = await pipe(messages, { max_new_tokens: 768 });
+  // pipeline returns [{ generated_text: "..." }]
+  const raw = Array.isArray(output) ? (output[0]?.generated_text ?? '') : String(output);
 
-  // The pipeline returns an array of generated sequences
-  const raw = output?.[0]?.generated_text ?? output?.[0]?.text ?? '';
-  // For chat models, generated_text may be an array of messages — extract last assistant message
-  const decoded = typeof raw === 'string'
-    ? raw
-    : Array.isArray(raw)
-      ? (raw.findLast(m => m.role === 'assistant')?.content ?? '')
-      : String(raw);
-
-  return parseStructuredOutput(decoded, await getImageDimensions(dataUrl));
+  return parseStructuredOutput(raw, await getImageDimensions(dataUrl));
 }
 
 async function getImageDimensions(dataUrl) {

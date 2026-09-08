@@ -6,8 +6,12 @@
  * Redacts sensitiveRegions out of a screenshot before it may ever be sent
  * to a remote model. Input/output are data URLs (PNG).
  *
+ * Each region may carry an optional `mode`:
+ *   - 'redact' (default): opaque black fill (full masking)
+ *   - 'blur'             : color-preserving blur (for faces)
+ *
  * @param {string} dataUrl
- * @param {Array<{bbox:{x:number,y:number,width:number,height:number}}>} sensitiveRegions
+ * @param {Array<{bbox:{x:number,y:number,width:number,height:number}, mode?: 'redact'|'blur'}>} sensitiveRegions
  * @returns {Promise<string>} sanitized data URL
  */
 export async function sanitizeScreenshot(dataUrl, sensitiveRegions) {
@@ -18,12 +22,23 @@ export async function sanitizeScreenshot(dataUrl, sensitiveRegions) {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(bitmap, 0, 0);
 
-  ctx.fillStyle = '#000000';
   for (const region of sensitiveRegions) {
     if (!region.bbox) continue;
     const { x, y, width, height } = region.bbox;
-    // Pad slightly so anti-aliased text edges near the box are also covered.
-    ctx.fillRect(x - 2, y - 2, width + 4, height + 4);
+    const pad = 2;
+    const bx = x - pad, by = y - pad, bw = width + pad * 2, bh = height + pad * 2;
+
+    if (region.mode === 'blur' && typeof ctx.filter === 'string') {
+      // Blur preserves local structure but destroys any identifiable detail.
+      ctx.save();
+      ctx.filter = 'blur(20px)';
+      ctx.drawImage(bitmap, bx, by, bw, bh, bx, by, bw, bh);
+      ctx.restore();
+    } else {
+      // Opaque black fill — covers the region and any anti-aliased edge text.
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(bx, by, bw, bh);
+    }
   }
 
   const outBlob = await canvas.convertToBlob({ type: 'image/png' });

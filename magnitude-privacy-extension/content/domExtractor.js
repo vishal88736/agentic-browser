@@ -94,5 +94,81 @@ function buildSelectorPath(el) {
   return parts.join(' > ');
 }
 
+// --- Media / document candidates --------------------------------------
+// Captures image/document-shaped elements so the local document detector can
+// flag PAN-card / Aadhaar / ID-card images WITHOUT reading their pixels on
+// this side of the boundary. Only structure + metadata (alt, src, title) is
+// collected here; the pixel-level decision happens locally in the background
+// document detector, never remotely.
+
+const MEDIA_SELECTOR = ['img', 'canvas', 'svg', 'object', 'embed', 'iframe', 'video', 'input[type="file"]'].join(',');
+
+// Containers that commonly carry background-image content (drag-drop previews,
+// thumbnails, hero images) — checked for computed background-image:url().
+const BACKGROUND_CANDIDATE_SELECTOR = ['div', 'section', 'article', 'header', 'footer', 'li', 'span', 'a', 'figure'].join(',');
+
+function extractMediaCandidates() {
+  const nodes = Array.from(document.querySelectorAll(MEDIA_SELECTOR));
+  const candidates = [];
+
+  for (const el of nodes) {
+    const rect = el.getBoundingClientRect();
+    const visible = isVisible(el);
+    const tag = el.tagName.toLowerCase();
+
+    candidates.push({
+      tag,
+      role: el.getAttribute('role') || (tag === 'input' ? 'file_input' : 'media'),
+      alt: el.getAttribute('alt') || el.getAttribute('aria-label') || undefined,
+      title: el.getAttribute('title') || undefined,
+      src: stripInlineData(el.getAttribute('src') || el.getAttribute('data') || undefined),
+      href: el.getAttribute('href') || undefined,
+      fileName: tag === 'input' ? (el.files && el.files[0] ? el.files[0].name : undefined) : undefined,
+      mimeType: tag === 'input' ? (el.files && el.files[0] ? el.files[0].type : undefined) : undefined,
+      visible,
+      bbox: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }
+    });
+  }
+
+  // CSS background-image content (drag-drop previews, thumbnails, hero images).
+  for (const el of document.querySelectorAll(BACKGROUND_CANDIDATE_SELECTOR)) {
+    let bg;
+    try { bg = window.getComputedStyle(el).backgroundImage; } catch { continue; }
+    if (!bg || bg === 'none') continue;
+    const url = bg.match(/url\(["']?([^"')]+)["']?\)/);
+    if (!url) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 30 || rect.height < 30) continue; // skip tiny decorations
+    candidates.push({
+      tag: el.tagName.toLowerCase(),
+      role: 'background_image',
+      alt: el.getAttribute('aria-label') || el.getAttribute('alt') || undefined,
+      title: el.getAttribute('title') || undefined,
+      src: stripInlineData(url[1]),
+      visible: isVisible(el),
+      bbox: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }
+    });
+  }
+
+  return candidates;
+}
+
+// Inline data: URLs can contain the raw file bytes; never carry them onward.
+function stripInlineData(src) {
+  if (typeof src === 'string' && src.startsWith('data:')) return 'data:[inline]';
+  return src;
+}
+
 // Expose for content.js
 window.__magnitudeExtractDomFields = extractDomFields;
+window.__magnitudeExtractMediaCandidates = extractMediaCandidates;

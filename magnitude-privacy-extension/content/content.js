@@ -13,7 +13,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
     case 'SNAPSHOT_DOM': {
       const fields = window.__magnitudeExtractDomFields();
-      sendResponse({ fields, url: location.href, title: document.title });
+      const mediaCandidates = window.__magnitudeExtractMediaCandidates ? window.__magnitudeExtractMediaCandidates() : [];
+      sendResponse({ fields, mediaCandidates, url: location.href, title: document.title });
       return false;
     }
 
