@@ -2,72 +2,120 @@
 <html>
 <head>
   <meta charset="utf-8" />
+  <link rel="stylesheet" href="../shared/theme.css" />
   <style>
-    body { font-family: -apple-system, system-ui, sans-serif; max-width: 560px; margin: 24px auto; color: #1a1a1a; }
-    fieldset { margin-bottom: 16px; }
-    label { display: block; margin: 8px 0 2px; font-size: 13px; }
-    input, select { width: 100%; box-sizing: border-box; padding: 4px; font-size: 13px; }
-    .checkbox-row { display: flex; align-items: center; gap: 8px; }
-    .checkbox-row input { width: auto; }
-    button { margin-top: 12px; padding: 8px 14px; }
-    small { color: #666; }
+    body { padding: 28px 20px 80px; }
+    .wrap { max-width: 920px; margin: 0 auto; }
+    .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+    .page-head .mark { width: 40px; height: 40px; border-radius: 12px; background: var(--grad); display: grid; place-items: center; color: #fff; }
+    .page-head .mark svg { width: 22px; height: 22px; }
+    .page-head h1 { font-size: 20px; margin: 0; }
+    .page-head p { margin: 2px 0 0; color: var(--text-dim); font-size: 13px; }
+    .savebar { position: sticky; bottom: 16px; margin-top: 18px; display: flex; align-items: center; gap: 12px; }
+    #savedMsg { color: var(--ok); font-size: 13px; }
   </style>
 </head>
-<body>
-  <h2>Local-First Privacy Agent — Settings</h2>
-
-  <fieldset>
-    <legend>Local VLM</legend>
-    <label>Model ID (transformers.js-compatible)</label>
-    <input id="LOCAL_VLM_MODEL" />
-    <label>Device</label>
-    <select id="LOCAL_VLM_DEVICE"><option value="auto">auto</option><option value="webgpu">webgpu</option><option value="wasm">wasm (CPU)</option></select>
-    <label>Precision / dtype</label>
-    <select id="LOCAL_VLM_DTYPE"><option value="auto">auto</option><option value="fp16">fp16</option><option value="q8">q8</option><option value="q4">q4</option></select>
-    <div style="margin-top: 10px; display: flex; align-items: center; gap: 10px;">
-      <button id="downloadModel" type="button">⬇ Download / Pre-cache Model</button>
-      <span id="downloadStatus" style="font-size:12px; color:#555;"></span>
+<body data-theme="dark">
+  <div class="wrap">
+    <div class="page-head">
+      <div class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5l8-3z" fill="currentColor"/><path d="M9 12l2 2 4-4" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div style="flex:1">
+        <h1>Privacy Shield — Settings</h1>
+        <p>Local-first browser agent configuration. Nothing sensitive leaves this device without local redaction.</p>
+      </div>
+      <button id="themeToggle" class="btn btn-ghost">Theme</button>
+      <button id="openDemo" class="btn">Open demo</button>
     </div>
-    <small style="display:block; margin-top:4px;">Downloads and caches the model locally so the agent can use it without delay. Weights are stored in your browser cache.</small>
-  </fieldset>
 
-  <fieldset>
-    <legend>Routing &amp; privacy</legend>
-    <div class="checkbox-row"><input type="checkbox" id="LOCAL_FIRST" /><label>Prefer local execution when possible</label></div>
-    <div class="checkbox-row"><input type="checkbox" id="ALLOW_REMOTE_REASONING" /><label>Allow remote reasoning fallback</label></div>
-    <label>Privacy mode</label>
-    <select id="PRIVACY_MODE"><option value="strict">strict (always sanitize)</option><option value="balanced">balanced</option></select>
-  </fieldset>
+    <div class="options-grid">
+      <!-- General -->
+      <section class="card">
+        <p class="card-title">General</p>
+        <div class="check-row"><input type="checkbox" id="LOCAL_FIRST" /><span>Prefer local execution<small><br>Plan locally when a task can be completed on-device.</small></span></div>
+        <div class="check-row"><input type="checkbox" id="ALLOW_REMOTE_REASONING" /><span>Allow remote reasoning fallback<small><br>Only sanitized context is ever sent.</small></span></div>
+        <label class="field-label">Privacy mode</label>
+        <select id="PRIVACY_MODE"><option value="strict">Strict (always sanitize)</option><option value="balanced">Balanced</option></select>
+        <label class="field-label">Activity retention</label>
+        <select id="ACTIVITY_RETENTION"><option value="20">20 events</option><option value="50">50 events</option><option value="100">100 events</option></select>
+      </section>
 
-  <fieldset>
-    <legend>Remote reasoning endpoint (optional, OpenAI-compatible)</legend>
-    <small>Only ever receives sanitized context — see README.</small>
-    <label>Endpoint URL</label>
-    <input id="REMOTE_ENDPOINT" placeholder="https://api.openai.com/v1/chat/completions" />
-    <label>Model</label>
-    <input id="REMOTE_MODEL" placeholder="gpt-4o-mini" />
-    <label>API key</label>
-    <input id="REMOTE_API_KEY" type="password" />
-  </fieldset>
+      <!-- Privacy protection -->
+      <section class="card">
+        <p class="card-title">Privacy protection</p>
+        <div class="check-row"><input type="checkbox" id="FAIL_CLOSED" checked disabled /><span style="display:flex;flex-direction:column"><span>Fail-closed mode <span class="pill pill-protected" style="margin-left:4px"><span class="dot"></span>recommended</span></span><small>Always blocks or redacts when privacy cannot be verified.</small></span></div>
+        <div class="check-row"><input type="checkbox" id="ENABLE_FACE_REDACTION" /><span>Face redaction <small>(blur)</small></span></div>
+        <div class="check-row"><input type="checkbox" id="ENABLE_QR_BARCODE" /><span>QR / barcode redaction</span></div>
+        <div class="check-row"><input type="checkbox" id="ENABLE_SIGNATURE" /><span>Signature redaction</span></div>
+        <div class="notice notice-info">Core PII detection, whole-document redaction, DOM sanitization, and the final payload scanner are always active and cannot be disabled.</div>
+      </section>
 
-  <fieldset>
-    <legend>Local credential vault</legend>
-    <small>Stored in chrome.storage.local on this device only. Plaintext in this scaffold — see README for the production hardening TODO.</small>
-    <label>Master Password</label>
-    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-      <input id="master_password" type="password" placeholder="Enter password to unlock/save vault" />
-      <button id="unlock" type="button" style="margin-top: 0;">Unlock</button>
+      <!-- Local models -->
+      <section class="card">
+        <p class="card-title">Local models</p>
+        <div class="kv"><span class="k">VLM</span><span class="v" id="vlmStatus">—</span></div>
+        <label class="field-label">Model ID (transformers.js-compatible)</label>
+        <input id="LOCAL_VLM_MODEL" placeholder="Leave blank for DOM-only protection" />
+        <label class="field-label">Device</label>
+        <select id="LOCAL_VLM_DEVICE"><option value="auto">auto</option><option value="webgpu">webgpu</option><option value="wasm">wasm (CPU)</option></select>
+        <label class="field-label">Precision / dtype</label>
+        <select id="LOCAL_VLM_DTYPE"><option value="auto">auto</option><option value="fp16">fp16</option><option value="q8">q8</option><option value="q4">q4</option></select>
+        <div class="kv"><span class="k">WebGPU</span><span class="v" id="webgpuStatus">unknown</span></div>
+        <div class="kv"><span class="k">WASM fallback</span><span class="v">available</span></div>
+        <div class="kv"><span class="k">OCR</span><span class="v" id="ocrStatus">bundled engine not installed</span></div>
+        <div class="btn-row" style="margin-top:10px">
+          <button id="downloadModel" class="btn">Download / pre-cache model</button>
+          <span id="downloadStatus" style="font-size:12px; align-self:center"></span>
+        </div>
+      </section>
+
+      <!-- Remote model -->
+      <section class="card">
+        <p class="card-title">Remote model</p>
+        <div class="notice notice-warn" style="margin-bottom:10px">The remote model receives <b>only sanitized context</b>. Raw screenshots, credentials, and detected sensitive values are blocked locally.</div>
+        <label class="field-label">Endpoint URL</label>
+        <input id="REMOTE_ENDPOINT" placeholder="https://api.openai.com/v1/chat/completions" />
+        <label class="field-label">Model</label>
+        <input id="REMOTE_MODEL" placeholder="gpt-4o-mini" />
+        <label class="field-label">API key</label>
+        <input id="REMOTE_API_KEY" type="password" autocomplete="off" />
+      </section>
+
+      <!-- Credential vault -->
+      <section class="card">
+        <p class="card-title">Credential vault</p>
+        <div class="kv"><span class="k">Encryption</span><span class="v" style="color:var(--ok)">AES-GCM + PBKDF2</span></div>
+        <div class="kv"><span class="k">Stored</span><span class="v" id="vaultCount">0 credentials</span></div>
+        <label class="field-label">Master password</label>
+        <div class="btn-row">
+          <input id="master_password" type="password" placeholder="Enter to unlock / save" style="flex:1" />
+          <button id="unlock" class="btn">Unlock</button>
+        </div>
+        <div id="vaultFields" class="hidden">
+          <label class="field-label">Aadhaar number</label>
+          <input id="cred_aadhaar_number" disabled />
+          <label class="field-label">PAN</label>
+          <input id="cred_pan" disabled />
+          <label class="field-label">Password</label>
+          <input id="cred_password" type="password" disabled />
+          <div class="notice notice-info" style="margin-top:8px">Credentials are resolved and inserted locally only. Values are never sent to the remote model, screenshots, or logs.</div>
+        </div>
+      </section>
+
+      <!-- Diagnostics -->
+      <section class="card">
+        <p class="card-title">Diagnostics</p>
+        <div id="diag"></div>
+        <div class="btn-row" style="margin-top:10px">
+          <button id="exportDiag" class="btn btn-sm">Export safe report</button>
+        </div>
+      </section>
     </div>
-    <label>Aadhaar number</label>
-    <input id="cred_aadhaar_number" disabled />
-    <label>PAN</label>
-    <input id="cred_pan" disabled />
-    <label>Password</label>
-    <input id="cred_password" type="password" disabled />
-  </fieldset>
 
-  <button id="save">Save</button>
-  <span id="savedMsg" style="margin-left:8px; color: green;"></span>
+    <div class="savebar">
+      <button id="save" class="btn btn-primary">Save settings</button>
+      <span id="savedMsg"></span>
+    </div>
+  </div>
 
   <script type="module" src="options.js"></script>
 </body>

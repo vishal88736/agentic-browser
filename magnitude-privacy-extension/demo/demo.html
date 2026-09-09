@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="../shared/theme.css" />
+  <style>
+    body { padding: 28px 20px 60px; }
+    .wrap { max-width: 820px; margin: 0 auto; }
+    .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    .page-head .mark { width: 42px; height: 42px; border-radius: 12px; background: var(--grad); display: grid; place-items: center; color: #fff; }
+    .page-head .mark svg { width: 24px; height: 24px; }
+    .page-head h1 { font-size: 20px; margin: 0; }
+    .page-head p { margin: 2px 0 0; color: var(--text-dim); }
+    .demo-flex { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+    .demo-pane { flex: 1 1 320px; min-width: 280px; }
+    .doc-line .dv { font-family: var(--mono); }
+    .banner { margin-bottom: 14px; }
+  </style>
+</head>
+<body data-theme="dark">
+  <div class="wrap">
+    <div class="page-head">
+      <div class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5l8-3z" fill="currentColor"/><path d="M9 12l2 2 4-4" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div style="flex:1">
+        <h1>Privacy demo</h1>
+        <p>Synthetic data only. Detection and redaction run entirely on your device — nothing is uploaded.</p>
+      </div>
+      <button id="runDemo" class="btn btn-primary">Run local scan</button>
+    </div>
+
+    <div class="notice notice-info banner">This page uses fake data (a fake identity card, fake email, fake phone, fake password). It demonstrates the on-device pipeline: detect → redact → scan.</div>
+
+    <div class="stepper" id="stepper"></div>
+
+    <div class="demo-flex">
+      <div class="demo-pane card">
+        <p class="card-title">Before — original (local only)</p>
+        <div class="demo-doc">
+          <div class="doc-head" id="docTitleBefore">DEMO Identity Document</div>
+          <div class="doc-body" id="docBefore"></div>
+        </div>
+        <div class="demo-doc" style="margin-top:12px">
+          <div class="doc-head">Form fields</div>
+          <div class="doc-body" id="fieldsBefore"></div>
+        </div>
+      </div>
+
+      <div class="demo-pane card">
+        <p class="card-title">After — sanitized (what could leave the device)</p>
+        <div class="demo-doc">
+          <div class="doc-head">Document</div>
+          <div class="doc-body" id="docAfter"></div>
+        </div>
+        <div class="demo-doc" style="margin-top:12px">
+          <div class="doc-head">Form fields</div>
+          <div class="doc-body" id="fieldsAfter"></div>
+        </div>
+        <div class="notice notice-info" style="margin-top:12px" id="summary"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="demo.js"></script>
+</body>
+</html>

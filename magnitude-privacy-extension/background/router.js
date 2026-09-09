@@ -10,7 +10,13 @@ const DEFAULT_CONFIG = {
   REMOTE_ENDPOINT: '', // OpenAI-generic compatible chat/completions URL; empty = remote disabled
   REMOTE_API_KEY: '',
   MAX_STEPS: 25,
-  CHANGE_DETECTION_THRESHOLD: 0.02 // fraction of pixels changed to trigger re-perception
+  CHANGE_DETECTION_THRESHOLD: 0.02, // fraction of pixels changed to trigger re-perception
+  // Optional additive visual protections (core PII/document detection is always on).
+  FAIL_CLOSED: true,              // always enforced; recommended — cannot be disabled
+  ENABLE_FACE_REDACTION: true,
+  ENABLE_QR_BARCODE: true,
+  ENABLE_SIGNATURE: true,
+  ACTIVITY_RETENTION: 50
 };
 
 export async function getConfig() {

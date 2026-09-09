@@ -1,5 +1,5 @@
 // background/background.js
-import { getConfig, decideRoute, shouldReanalyze, cachePerception, getCachedPerception } from './router.js';
+import { getConfig, setConfig, decideRoute, shouldReanalyze, cachePerception, getCachedPerception } from './router.js';
 import { callRemoteReasoner } from './remoteClient.js';
 import { runPrivacyGate } from '../shared/privacyGate.js';
 import { sanitizeScreenshot, redactForLog } from '../shared/sanitize.js';
@@ -12,6 +12,11 @@ import { decryptVault } from '../shared/crypto.js';
 let offscreenReady = null;
 let taskState = { running: false, log: [] };
 let localVlmAvailable = false; // set to true only after successful LOAD_MODEL
+let modelState = 'not_configured'; // 'loading' | 'ready' | 'unavailable' | 'not_configured'
+let statusCounters = {
+  sensitiveRegions: 0, documentsRedacted: 0, visualProtected: 0,
+  domSanitized: 0, blockedRequests: 0, lastScanAt: null, blockedReason: null
+};
 
 // --- offscreen document lifecycle --------------------------------------
 
@@ -88,6 +93,7 @@ async function runTask(instruction, tabId) {
   taskState = { running: true, log: [] };
   const config = await getConfig();
 
+  modelState = config.LOCAL_VLM_MODEL ? 'loading' : 'not_configured';
   const loadResult = await offscreenCall({
     type: 'LOAD_MODEL',
     config: {
@@ -99,8 +105,10 @@ async function runTask(instruction, tabId) {
   if (!loadResult.ok) {
     log({ event: 'vlm_load_warning', message: `Local VLM unavailable: ${loadResult.error}. Continuing with DOM-only perception + remote reasoning.` });
     localVlmAvailable = false;
+    modelState = 'unavailable';
   } else {
     localVlmAvailable = true;
+    modelState = 'ready';
     log({ event: 'model_loaded', model: config.LOCAL_VLM_MODEL });
   }
 
@@ -150,6 +158,12 @@ async function runTask(instruction, tabId) {
     const visualResult = await offscreenCall({ type: 'RUN_VISUAL_DETECT', screenshot }).catch(() => ({ ok: false }));
     if (visualResult.ok && visualResult.regions) {
       for (const r of visualResult.regions) {
+        // Optional additive visual protections, gated by configuration.
+        const enabled =
+          (r.category === 'face' && config.ENABLE_FACE_REDACTION !== false) ||
+          ((r.category === 'qr_code' || r.category === 'barcode') && config.ENABLE_QR_BARCODE !== false) ||
+          (r.category === 'signature' && config.ENABLE_SIGNATURE !== false);
+        if (!enabled) continue;
         decision.sensitiveRegions.push({
           bbox: r.bbox,
           category: r.category,
@@ -169,6 +183,16 @@ async function runTask(instruction, tabId) {
       detectedDocuments: documentResult.documents,
       visualFindings: visualResult.ok ? visualResult.regions.map(r => r.category) : []
     });
+
+    // Update the UI status counters (aggregate, never raw values).
+    statusCounters.sensitiveRegions += decision.sensitiveRegions.length;
+    statusCounters.documentsRedacted += documentResult.regions.length;
+    statusCounters.visualProtected += (visualResult.ok ? visualResult.regions.length : 0);
+    statusCounters.domSanitized += (domSnapshot.fields || []).length;
+    statusCounters.lastScanAt = Date.now();
+    if (decision.sensitiveRegions.length) {
+      log({ event: 'sensitive_document_redacted', count: decision.sensitiveRegions.length });
+    }
 
     // Try a purely local heuristic plan first (spec section 13 "simple task -> local").
     let plan = planLocally({ instruction, decision, domSnapshot });
@@ -200,6 +224,13 @@ async function runTask(instruction, tabId) {
           sanitizedContext: decision.sanitizedContext,
           sanitizedScreenshot,
           actionSchemaDescription: 'Allowed variants: mouse:click, keyboard:type, mouse:scroll, browser:navigate, browser:tab:switch, browser:tab:new, browser:upload_file, local:fill_credential.'
+        }).catch((err) => {
+          if (/BLOCKED by local leakage scanner/.test(String(err && err.message || err))) {
+            statusCounters.blockedRequests += 1;
+            statusCounters.blockedReason = 'Potential data leak was blocked — nothing was sent to the remote server.';
+            log({ event: 'potential_leak_blocked', message: 'Payload failed the final leakage scanner' });
+          }
+          throw err;
         });
         log({ event: 'remote_plan_received', actionCount: plan.actions.length, sanitizedContextPreview: decision.sanitizedContext.slice(0, 200) });
       } else {
@@ -487,6 +518,43 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GET_TASK_LOG') {
     sendResponse({ log: taskState.log, running: taskState.running });
     return false;
+  }
+  if (msg.type === 'CLEAR_ACTIVITY') {
+    taskState.log = [];
+    statusCounters.blockedReason = null;
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (msg.type === 'SET_CONFIG') {
+    setConfig(msg.config || {}).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg.type === 'GET_STATUS') {
+    (async () => {
+      const config = await getConfig();
+      const { masterPassword } = await chrome.storage.session.get('masterPassword');
+      const { vault } = await chrome.storage.local.get('vault');
+      let endpointHost = '';
+      try { endpointHost = config.REMOTE_ENDPOINT ? new URL(config.REMOTE_ENDPOINT).host : ''; } catch { endpointHost = ''; }
+      sendResponse({
+        agentRunning: taskState.running,
+        model: { state: modelState, id: config.LOCAL_VLM_MODEL || null, device: config.LOCAL_VLM_DEVICE, dtype: config.LOCAL_VLM_DTYPE },
+        webgpu: null,
+        ocr: { available: null }, // no bundled OCR engine; seam + fail-closed only
+        remote: {
+          allowed: !!config.ALLOW_REMOTE_REASONING && !!config.REMOTE_ENDPOINT,
+          configured: !!config.REMOTE_ENDPOINT,
+          endpointHost
+        },
+        vault: { locked: !masterPassword, count: vault && vault.cipherText ? 'encrypted' : 0 },
+        failClosed: true,
+        privacyMode: config.PRIVACY_MODE,
+        localFirst: !!config.LOCAL_FIRST,
+        counts: { ...statusCounters },
+        blockedReason: statusCounters.blockedReason
+      });
+    })();
+    return true; // async response
   }
   // Do not return false explicitly for messages we don't handle (like target: 'offscreen')
   // as it can prematurely close the message channel in MV3.

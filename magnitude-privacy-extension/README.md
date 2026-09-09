@@ -102,8 +102,11 @@ popup ── START_TASK ──▶ background/background.js (orchestrator)
 | Remote reasoning (sanitized-only, fail-closed) | `background/remoteClient.js` | 11, 15 |
 | Routing policy + change-detection cache | `background/router.js` | 13, 14, 15 |
 | Orchestrator / action executor | `background/background.js` | 2, 9, 12, 17 |
-| Config + credential vault UI | `options/` | 3, 9 |
-| Task control UI | `popup/` | — |
+| **UI state model (pure, testable)** | `shared/statusModel.js` | — |
+| **Design system** | `shared/theme.css` | — |
+| Settings page (redesigned) | `options/` | 3, 9 |
+| Agent control + status popup (redesigned) | `popup/` | — |
+| **Privacy demo (synthetic, on-device)** | `demo/` | 10 |
 | Tests | `tests/` | 16 |
 
 ## 3. Install & run
@@ -145,6 +148,21 @@ Open the extension's **Settings** (popup → "Settings", or
   OpenAI-compatible. Leave `REMOTE_ENDPOINT` empty to run fully local-only
   (remote calls become impossible, not just discouraged).
 
+## 4.5 UI
+
+- **Popup** — dark-first dashboard with a live protection status hero, a
+  5-step privacy-pipeline stepper, an anonymized detection counter grid, agent
+  controls (run/stop/rescan), vault unlock, and a sanitized activity feed.
+  Statuses reflect real runtime state (protected / processing / needs
+  attention / blocked / model unavailable), never hardcoded values.
+- **Options** — organized General / Privacy protection / Local models /
+  Remote model / Credential vault / Diagnostics sections. Fail-closed mode is
+  shown as always-on and recommended. Credentials are shown only after local
+  decryption and are never displayed in plaintext beyond the unlock view.
+- **Demo (`demo/demo.html`)** — a synthetic-data before/after page that runs
+  the actual local detectors and redaction. It uses fake identity data only and
+  performs zero network requests.
+
 ## 5. Testing the privacy flow
 
 ```bash
@@ -160,6 +178,9 @@ node --test tests/crypto.test.js         # AES-GCM vault round-trip / fail-safe
 node --test tests/e2ePayload.test.js     # mock-server payload-leak checks
 node --test tests/e2eBrowser.test.js     # headless-Chromium redaction + leak test
 node --test tests/e2eVisual.test.js      # browser-rendered CV detection
+node --test tests/e2eExtension.test.js   # extension boot + content-script injection
+node --test tests/e2eUi.test.js          # popup/options/demo render (real runtime)
+node --test tests/statusModel.test.js    # UI status/activity/demo state model
 ```
 
 Covers (among others): Aadhaar/PAN/email/phone/password/credit-card/address/IFSC
@@ -252,9 +273,10 @@ speculatively.
 ## 8. Explicit note on completeness
 
 The security boundary is implemented and covered by an automated test suite
-(58 tests, including a headless-Chromium end-to-end run that loads a
-synthetic PAN-card form, redacts the card region pixel-for-pixel, and proves
-the assembled payload is leak-free). The credentials vault is encrypted with
+(125 tests across 19 files, including headless-Chromium end-to-end runs that
+load the extension, drive value-free DOM capture, verify pixel-level redaction,
+render the redesigned popup/options/demo UI, and prove the assembled payload is
+leak-free). The credentials vault is encrypted with
 AES-GCM (key derived via PBKDF2). The retry loop is action-aware. The outbound
 payload is scanned and fails closed before every network request.
 
