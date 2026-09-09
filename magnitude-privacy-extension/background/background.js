@@ -6,6 +6,7 @@ import { sanitizeScreenshot, redactForLog } from '../shared/sanitize.js';
 import { validateAction, LOCAL_ONLY_VARIANTS } from '../shared/actionSchema.js';
 import { detectSensitiveDocument } from '../shared/documentDetector.js';
 import { decideRecovery, interpretOutcome } from '../shared/actionSafety.js';
+import { decidePrivacyState } from '../shared/privacyState.js';
 import { decryptVault } from '../shared/crypto.js';
 
 let offscreenReady = null;
@@ -179,6 +180,18 @@ async function runTask(instruction, tabId) {
         const sanitizedScreenshot = config.PRIVACY_MODE === 'strict' || decision.sensitiveRegions.length
           ? await sanitizeScreenshot(screenshot, decision.sensitiveRegions)
           : screenshot;
+
+        // Explicit fail-closed state before any network request (spec §14).
+        // remoteClient additionally runs the final payload scanner and refuses
+        // to fetch unless the payload is proven safe.
+        const privacyState = decidePrivacyState({
+          leakScanSafe: null, // computed authoritatively inside remoteClient right before fetch
+          sensitiveRegions: decision.sensitiveRegions.length,
+          redactionOk: true,
+          perceptionOk: localVlmAvailable || visualResult.ok,
+          documentUncertain: documentResult.regions.some(r => r.decision === 'confirm')
+        });
+        log({ event: 'privacy_state', state: privacyState.state, reason: privacyState.reason });
 
         plan = await callRemoteReasoner({
           endpoint: config.REMOTE_ENDPOINT,

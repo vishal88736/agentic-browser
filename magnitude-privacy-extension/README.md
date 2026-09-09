@@ -91,6 +91,8 @@ popup ── START_TASK ──▶ background/background.js (orchestrator)
 | Regex/context/DOM detectors | `shared/detectors.js` | 6.1 |
 | Screenshot redaction | `shared/sanitize.js` | 7 |
 | **Final outgoing payload leakage scanner** | `shared/leakScanner.js` | 7, 15 |
+| **Fail-closed privacy state machine** | `shared/privacyState.js` | 14 |
+| **Local OCR interface + fail-closed policy** | `shared/ocr.js` | 5 |
 | **Sensitive-document / PAN-card detector** | `shared/documentDetector.js` | 6 (critical PAN req.) |
 | **Local CV detectors (QR/barcode/face/signature)** | `shared/visualDetectors.js` | 6 |
 | **DOM/accessibility sanitizer** | `shared/domSanitizer.js` | 6 |
@@ -196,6 +198,18 @@ screenshot — the outbound request is aborted (fail-closed) by
 - **Model-specific VLM prompt/output adapters** are not tuned per model.
 - WebGPU availability, low-end device tiering, and per-tier benchmark data
   (section 7 below) have not been executed in this environment.
+
+Known artefacts & compatibility notes:
+- `ort-webgpu-esm.js` (root) is a vendored **ONNX Runtime WebGPU ESM bundle**
+  intended for an optional ONNX-based local VLM path. It is **not currently
+  wired into any code**; it is kept for the future ONNX backend. Fall back on
+  the transformers.js path (`offscreen/vendor/transformers.web.min.js`), which
+  is the active local-VLM runtime.
+- **Firefox** is not yet supported: Firefox MV3 lacks `chrome.offscreen`
+  (used for the local VLM + screenshot CV redaction); `chrome.debugger` and
+  `captureVisibleTab` differ subtly. The DOM/detector/sanitizer/leak-scanner
+  layer is browser-agnostic, but the offscreen/WebGPU path is Chrome-only for
+  now.
 
 The deterministically testable security boundary (detection, redaction,
 sanitization, leakage scan, encryption, retry/verification) is implemented and

@@ -18,6 +18,7 @@ const PATTERNS = {
   bankAccount: /\b\d{9,18}\b/,
   email: /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/,
   phone: /\b(?:\+?\d{1,3}[-\s]?)?\d{10}\b/,
+  mobile: /\b[6-9]\d{9}\b/, // Indian mobile — starts 6-9, high-signal
   dob: /\b(0[1-9]|[12]\d|3[01])[\/\-.](0[1-9]|1[0-2])[\/\-.](19|20)\d{2}\b/,
   otp: /\b\d{4,8}\b/,
   pincode: /\b[1-9]\d{5}\b/,
@@ -36,11 +37,12 @@ const CONTEXT_WORDS = {
   dob: ['date of birth', 'dob', 'birth date'],
   bankAccount: ['account number', 'a/c no', 'bank account', 'ifsc', 'account no'],
   creditCard: ['card number', 'credit card', 'debit card', 'cvv', 'expiry'],
-  pincode: ['pincode', 'pin code', 'postal code', 'pin', 'postal']
+  pincode: ['pincode', 'pin code', 'postal code', 'pin', 'postal'],
+  phone: ['phone', 'mobile', 'contact', 'call', 'tel']
 };
 
 // Format-strong patterns that are high-signal WITHOUT any context word.
-const INHERENTLY_HIGH_SIGNAL = new Set(['pan', 'email', 'dob', 'ifsc']);
+const INHERENTLY_HIGH_SIGNAL = new Set(['pan', 'email', 'dob', 'ifsc', 'mobile']);
 
 function hasNearbyContext(text, index, category) {
   const words = CONTEXT_WORDS[category];

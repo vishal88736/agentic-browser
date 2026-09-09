@@ -35,6 +35,14 @@ const FINAL_GATE_PATTERNS = [
 // Access-token / session-offering headers (Bearer, Basic, cookie session).
 const TOKEN_TOKENS = [/Bearer\s+[A-Za-z0-9._~+/=-]{10,}/i];
 
+// Document/identity file names that must never cross the boundary.
+const SENSITIVE_FILENAME_HINTS = [
+  /pan[_-]?card/i, /aadhaar/i, /uidai/i, /passport/i, /driv(ing)?[_-]?licen/i,
+  /voter[_-]?id/i, /employee[_-]?id/i, /student[_-]?id/i, /college[_-]?id/i,
+  /statement/i, /cheque/i, /tax|form[_-]?16|26as/i, /salary|payslip/i,
+  /medical|prescription/i, /confidential|proprietary|internal/i
+];
+
 // API-key / token-shaped strings. A key NAME is not enough (e.g. the word
 // "password" in a prompt), but a key name paired with a high-entropy value
 // is treated as a leak.
@@ -135,32 +143,48 @@ export function scanPayloadForLeaks(payload, { strict = true } = {}) {
     // positives (base64 looks like a long high-entropy token).
     if (extractBase64Body(text)) return;
 
+    // Scan the raw text plus any practically-decodable encodings (percent /
+    // URL encoding and fullwidth Unicode homoglyphs) so encoded leaks are
+    // caught too (spec section 13).
+    const forms = [text];
+    const pc = decodePercentEncoding(text);
+    if (pc !== text) forms.push(pc);
+    const fw = normalizeFullwidth(text);
+    if (fw !== text) forms.push(fw);
+
+    const seenMatches = new Set();
+    for (const form of forms) scanTextForm(form, path, seenMatches);
+  }
+
+  function scanTextForm(text, path, seenMatches) {
     const sliced = text.length > 512 ? text.slice(0, 512) : text;
+
+    const record = (category, match, confidence, reason) => {
+      const key = `${category}:${match}`;
+      if (seenMatches.has(key)) return;
+      seenMatches.add(key);
+      findings.push({ path, category, match, confidence, reason });
+    };
+
+    // Filename carrying a document hint (only when it looks like a real file).
+    for (const re of SENSITIVE_FILENAME_HINTS) {
+      if (re.test(text) && looksLikeFileName(text)) {
+        record('sensitive_filename', text.trim().slice(0, 120), 0.85, 'sensitive document file name in payload');
+        break;
+      }
+    }
 
     for (const { category, re } of FINAL_GATE_PATTERNS) {
       re.lastIndex = 0;
       let m;
       while ((m = re.exec(sliced)) !== null) {
-        if (category === 'creditCard' && !luhnValid(m[0].replace(/\D/g, ''))) continue;
-        findings.push({
-          path,
-          category,
-          match: m[0],
-          confidence: 0.95,
-          reason: 'final-gate sensitive pattern matched in outgoing text'
-        });
+        record(category, m[0], 0.95, 'final-gate sensitive pattern matched in outgoing text');
       }
     }
 
     for (const finding of detectSensitiveText(sliced)) {
       if (ALWAYS_BLOCK.has(finding.category) || finding.confidence >= 0.8) {
-        findings.push({
-          path,
-          category: finding.category,
-          match: finding.match,
-          confidence: finding.confidence,
-          reason: 'sensitive pattern matched in outgoing text'
-        });
+        record(finding.category, finding.match, finding.confidence, 'sensitive pattern matched in outgoing text');
       }
     }
 
@@ -169,38 +193,20 @@ export function scanPayloadForLeaks(payload, { strict = true } = {}) {
     let cm;
     while ((cm = cardRe.exec(sliced)) !== null) {
       if (luhnValid(cm[0].replace(/\D/g, ''))) {
-        findings.push({
-          path,
-          category: 'creditCard',
-          match: cm[0],
-          confidence: 0.95,
-          reason: 'Luhn-valid credit-card number'
-        });
+        record('creditCard', cm[0], 0.95, 'Luhn-valid credit-card number');
       }
     }
 
     for (const re of API_KEY_PATTERNS) {
       if (re.test(sliced)) {
-        findings.push({
-          path,
-          category: 'api_key',
-          match: sliced.match(re)?.[0],
-          confidence: 0.8,
-          reason: 'API-key/token-shaped string present'
-        });
+        record('api_key', sliced.match(re)?.[0], 0.8, 'API-key/token-shaped string present');
         break;
       }
     }
 
     for (const re of TOKEN_TOKENS) {
       if (re.test(sliced)) {
-        findings.push({
-          path,
-          category: 'access_token',
-          match: sliced.match(re)?.[0],
-          confidence: 0.9,
-          reason: 'access token / session credential present'
-        });
+        record('access_token', sliced.match(re)?.[0], 0.9, 'access token / session credential present');
         break;
       }
     }
@@ -258,6 +264,24 @@ function luhnValid(num) {
     alt = !alt;
   }
   return sum % 10 === 0;
+}
+
+// Decode percent/URL encoding so `john%40example.com` is caught as an email.
+function decodePercentEncoding(text) {
+  if (!text.includes('%')) return text;
+  try { return decodeURIComponent(text); } catch { return text; }
+}
+
+// A string that plausibly references a file by extension.
+function looksLikeFileName(text) {
+  return /\.\b[a-z0-9]{2,5}\b/i.test(text) && !/https?:\/\//i.test(text);
+}
+
+// Normalize fullwidth ASCII homoglyphs (＠０-９Ａ-Ｚａ-ｚ) to their ASCII forms so
+// Unicode variants of email/PAN/phone patterns are still detected.
+function normalizeFullwidth(text) {
+  if (!/[\uFF01-\uFF5E]/.test(text)) return text;
+  return text.replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
 }
 
 function extractBase64Body(text) {
